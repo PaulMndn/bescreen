@@ -11,10 +11,16 @@ URL_DBSNP="ftp://ftp.ncbi.nih.gov/snp/organisms/human_9606/VCF/00-All.vcf.gz"
 mkdir -p "$OUTPUT_FASTA"
 mkdir -p "$OUTPUT_GTF"
 mkdir -p "$OUTPUT_VEP"
-mkdir -p "$OUTPUT_DBSNP"
+# mkdir -p "$OUTPUT_DBSNP"
 
+echo "downloading, extracting FASTA"
 curl --output-dir "$OUTPUT_FASTA" -O "$URL_FASTA"
 gunzip "${OUTPUT_FASTA}/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz"
+
+echo "downloading gtf annotations"
 curl --output-dir "$OUTPUT_GTF" -O "$URL_GTF"
+
+echo "downloading vep"
 curl --output-dir "$OUTPUT_VEP" -O "$URL_VEP"
-curl --output-dir "$OUTPUT_DBSNP" -O "$URL_DBSNP"
+
+# curl --output-dir "$OUTPUT_DBSNP" -O "$URL_DBSNP"

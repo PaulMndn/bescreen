@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import itertools
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any
@@ -24,6 +25,9 @@ import dbsnp_sqlite3
 import get_vep
 import protein_variant
 import shared
+
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +176,7 @@ def _resolve_rsids(rsids: list[str], dbsnp_db: str) -> list[str]:
     Each returned string is of the form ``"<rsid>:<chrom_pos_ref_alt>"`` or
     ``"<rsid>:non_existent_input_rsID"`` when the rsID is not found.
     """
+    logger.debug("Resolving %d rsID input(s) using dbSNP database %s", len(rsids), dbsnp_db)
     rsidvars = dbsnp_sqlite3.transform_locations(
         dbsnp_sqlite3.query_rsids(rsids, dbsnp_db)
     )
@@ -185,7 +190,9 @@ def _resolve_rsids(rsids: list[str], dbsnp_db: str) -> list[str]:
             [pl.col('rsid'), pl.col('variant')], separator=':'
         )
     )
-    return rsidvars['rsid_variant'].to_list()
+    resolved = rsidvars['rsid_variant'].to_list()
+    logger.debug("Resolved %d rsID input(s) to variant records", len(resolved))
+    return resolved
 
 
 def _resolve_tmuts(
@@ -197,6 +204,7 @@ def _resolve_tmuts(
 
     Each returned string is of the form ``"<tmut>:<chrom_pos_ref_alt>"``.
     """
+    logger.debug("Resolving %d transcript mutation input(s)", len(tmuts))
     resolved: list[str] = []
     for tmut in tmuts:
         parts = tmut.split("-")
@@ -207,6 +215,10 @@ def _resolve_tmuts(
         )
         for snp in tmutvar:
             resolved.append(f'{tmut}:{snp}')
+    logger.debug(
+        "Expanded transcript mutation input(s) into %d genomic variant record(s)",
+        len(resolved),
+    )
     return resolved
 
 
@@ -223,6 +235,11 @@ def _prepare_variant_list(
     Handles rsID and transcript-mutation expansion in-place.
     """
     variant_list: list[str] = []
+
+    logger.info(
+        "Preparing variant input from %s",
+        f'file {input_file}' if input_file else 'CLI argument',
+    )
 
     if input_file:
         input_df = pl.read_csv(input_file, separator=',')
@@ -245,6 +262,8 @@ def _prepare_variant_list(
                     '"chr", "pos"(, "ref") and "alt"!\n'
                     'Please provide either "variant" or "chr", "pos"(, "ref") and "alt"!'
                 )
+
+        logger.debug("Using input format %s for variant preparation", input_format)
 
         if input_format == "variant":
             if 'variant' not in input_columns:
@@ -293,6 +312,12 @@ def _prepare_variant_list(
         variant_list.remove(tmut)
     if tmuts:
         variant_list += _resolve_tmuts(tmuts, cdss, ref_genome)
+
+    if rsids:
+        logger.debug("Expanded %d rsID input(s)", len(rsids))
+    if tmuts:
+        logger.debug("Expanded %d transcript mutation input(s)", len(tmuts))
+    logger.info("Prepared %d variant input(s) after expansion", len(variant_list))
 
     return variant_list
 
@@ -422,6 +447,12 @@ def _get_target_base(
     except Exception:
         # pyfaidx raises various exception types (KeyError, ValueError, etc.)
         # when a chromosome or coordinate is not present in the genome file.
+        logger.debug(
+            "Reference lookup failed for %s:%d",
+            chrom,
+            position + 1,
+            exc_info=True,
+        )
         variant = variant + ':genomic_coordinates_not_found'
         return 'genomic_coordinates_not_found', variant
 
@@ -490,6 +521,11 @@ def _determine_editability(
     """
     if (target_base_ref == be_fwd['REF'] and alt == be_fwd['ALT']) or \
        (target_base_ref == be_fwd['REF'] and allpossible):
+        logger.debug(
+            "Editor %s matches forward editability for reference base %s",
+            be_name,
+            target_base_ref,
+        )
         target_seq_ref_start = position - pam_config.bases_before_variant
         target_seq_ref_end = position + pam_config.bases_after_variant_with_pam + 1
         target_seq_ref = str(
@@ -508,6 +544,11 @@ def _determine_editability(
 
     if (target_base_ref == be_rev['REF'] and alt == be_rev['ALT']) or \
        (target_base_ref == be_rev['REF'] and allpossible):
+        logger.debug(
+            "Editor %s matches reverse editability for reference base %s",
+            be_name,
+            target_base_ref,
+        )
         target_seq_ref_end = position - pam_config.bases_after_variant_with_pam
         target_seq_ref_start = position + pam_config.bases_before_variant + 1
         target_seq_ref = str(
@@ -526,6 +567,13 @@ def _determine_editability(
             target_seq_ref_start=target_seq_ref_start,
         )
 
+    logger.debug(
+        "Editor %s cannot edit ref=%s alt=%s (allpossible=%s)",
+        be_name,
+        target_base_ref,
+        alt,
+        allpossible,
+    )
     return None
 
 
@@ -778,6 +826,7 @@ def _annotate_cds_for_guide(
     )
 
     if cdss_filtered.is_empty():
+        logger.debug("No CDS annotation found for %s:%d", chrom, position + 1)
         no_cds = ['no_CDS_found']
         return _GuideAnnotation(
             gene_symbols=no_cds,
@@ -948,6 +997,7 @@ def _process_variant_with_editor(
     This function is intentionally self-contained so that, in the future,
     it can be dispatched to a worker thread or process with no changes.
     """
+    logger.debug("Processing variant %s with editor %s", variant, be_name)
     chrom, position_str, ref, alt, variant = _parse_variant_coords(variant, ignorestring)
 
     error_code = _variant_error_code(variant)
@@ -958,6 +1008,7 @@ def _process_variant_with_editor(
             variant = variant + ':genomic_position_not_numeric'
             error_code = 'genomic_position_not_numeric'
             position = 0
+            logger.debug("Variant %s has a non-numeric genomic position", variant)
         else:
             position = int(position_str) - 1
     else:
@@ -970,6 +1021,16 @@ def _process_variant_with_editor(
         target_base_ref, variant = _get_target_base(ref_genome, chrom, position, variant)
         if target_base_ref == 'genomic_coordinates_not_found':
             error_code = 'genomic_coordinates_not_found'
+
+    logger.debug(
+        "Variant %s resolved to chrom=%s position=%s ref=%s alt=%s target_base=%s",
+        variant,
+        chrom,
+        position_str,
+        ref or 'NA',
+        alt,
+        target_base_ref,
+    )
 
     # Reference-match check
     if ref:
@@ -994,6 +1055,12 @@ def _process_variant_with_editor(
 
     # Non-editable early exit
     if error_code is not None or target_base_ref in _ERROR_CODES:
+        logger.debug(
+            "Skipping variant %s with editor %s due to error condition %s",
+            variant,
+            be_name,
+            error_code or target_base_ref,
+        )
         return _VariantEditorResult(
             variant=variant,
             variant_real=variant_real,
@@ -1023,6 +1090,7 @@ def _process_variant_with_editor(
     )
 
     if editability is None:
+        logger.debug("Variant %s is not editable by %s", variant_real, be_name)
         return _VariantEditorResult(
             variant=variant,
             variant_real=variant_real,
@@ -1159,6 +1227,20 @@ def _process_variant_with_editor(
             target_seq_ref_start -= 1
         else:
             target_seq_ref_start += 1
+
+    if guide_records:
+        logger.debug(
+            "Variant %s with editor %s produced %d guide(s)",
+            variant_real,
+            be_name,
+            len(guide_records),
+        )
+    else:
+        logger.debug(
+            "Variant %s is editable by %s but no compatible guides were found",
+            variant_real,
+            be_name,
+        )
 
     return _VariantEditorResult(
         variant=variant,
@@ -1297,7 +1379,9 @@ def _build_sgrna_dataframe(results: list[_VariantEditorResult]) -> pl.DataFrame:
         rows["synonymous_specific"].append([g.annotation.synonymouss for g in guides])
         rows["consequence"].append([g.annotation.consequences for g in guides])
 
-    return pl.DataFrame(rows, strict=False)
+    sgrna_df = pl.DataFrame(rows, strict=False)
+    logger.debug("Built sgRNA dataframe with %d row(s)", sgrna_df.height)
+    return sgrna_df
 
 
 # ---------------------------------------------------------------------------
@@ -1311,6 +1395,7 @@ def _apply_blast_annotations(
     no_contigs: bool,
 ) -> pl.DataFrame:
     """Add BLAST off-target counts to *sgrnas*."""
+    logger.info("Running BLAST annotation for %d design row(s)", sgrnas.height)
     blast_guides.check_blastdb(refgenome, False)
     sgrnas = sgrnas.with_row_index('index')
     guides = sgrnas.select('index', 'guide').explode('guide')
@@ -1324,6 +1409,7 @@ def _apply_blast_annotations(
         )
     else:
         sgrnas = sgrnas.with_columns(blastcount=pl.col('guide'))
+    logger.info("Finished BLAST annotation")
     return sgrnas.drop('index')
 
 
@@ -1359,6 +1445,8 @@ def _apply_vep_annotations(
 
     variants_vep_sorted = shared.sort_variantsdf(variants_vep)
     unique_variants = variants_vep_sorted['variant'].unique(maintain_order=True).to_list()
+
+    logger.info("Running VEP annotation for %d unique variant(s)", len(unique_variants))
 
     vep_annotations = get_vep.get_vep_annotation(
         unique_variants,
@@ -1405,6 +1493,7 @@ def _apply_vep_annotations(
     variants_vep_resorted = variants_vep_resorted.select(
         pl.exclude(["original_index", "variant"])
     )
+    logger.info("Finished VEP annotation")
     return sgrnas.with_columns(variants_vep_resorted)
 
 
@@ -1421,6 +1510,21 @@ def _apply_filters(
     columns_to_modify_last: list[str],
 ) -> pl.DataFrame:
     """Filter *sgrnas* according to the active filter flags."""
+    initial_rows = sgrnas.height
+    active_filters = [
+        name for name, enabled in [
+            ('synonymous', filter_synonymous),
+            ('splice_site', filter_splice_site),
+            ('specific', filter_specific),
+            ('missense', filter_missense),
+            ('nonsense', filter_nonsense),
+            ('stoplost', filter_stoplost),
+            ('startlost', filter_startlost),
+        ]
+        if enabled
+    ]
+    logger.info("Applying filters: %s", ', '.join(active_filters))
+
     sgrnas_columns = sgrnas.columns
     sgrnas = sgrnas.explode(symbols_to_contract + columns_to_modify_last)
 
@@ -1505,6 +1609,11 @@ def _apply_filters(
         [c for c in sgrnas.columns if c not in (symbols_to_contract + columns_to_modify_last)],
         maintain_order=True,
     ).agg(pl.all())
+    logger.info(
+        "Filtering completed: %d row(s) before filters, %d row(s) after filters",
+        initial_rows,
+        sgrnas.height,
+    )
     return sgrnas[sgrnas_columns]
 
 
@@ -1529,6 +1638,7 @@ def _format_output(
     filter_startlost: bool,
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Apply final transforms and produce SAM-ready data alongside the main table."""
+    logger.debug("Formatting output in %s aspect", aspect)
     # Column groupings for nested-list flattening
     aa_pos_cols = ['aa_pos']
     splice_site_cols = ['splice_site_included', 'synonymous_specific']
@@ -1640,6 +1750,11 @@ def _format_output(
             'safety_region', 'num_edits_safety', 'additional_in_safety',
         ])
 
+    logger.debug(
+        "Prepared formatted sgRNA table with %d row(s) and SAM table with %d row(s)",
+        sgrnas.height,
+        sam_df.height,
+    )
     return sgrnas, sam_df
 
 
@@ -1694,11 +1809,28 @@ def design_bes(
         *sgrnas* – one row per variant (collapsed) or guide (exploded).
         *sam_df* – SAM-format data for BAM file generation.
     """
+    logger.info("Starting base editing guide design")
+
     if guidelength < 17:
         raise ValueError('Please set the guide length to at least 17 bp!')
 
     if not basechange:
         raise ValueError('Please select at least one base editor!')
+
+    logger.debug(
+        "Design parameters: pamsite=%s fiveprimepam=%s guide_length=%d window=%d-%d "
+        "window_plus=%d-%d aspect=%s allpossible=%s mane_select_only=%s",
+        pamsite,
+        fiveprimepam,
+        guidelength,
+        edit_window_start,
+        edit_window_end,
+        edit_window_start_plus,
+        edit_window_end_plus,
+        aspect,
+        allpossible,
+        mane_select_only,
+    )
 
     # Deep-copy shared state so this call is re-entrant (safe for threading)
     iupac_nt_code = copy.deepcopy(shared.iupac_nt_code)
@@ -1724,18 +1856,31 @@ def design_bes(
         edit_window_end_plus = edit_window_start_plus
         edit_window_start_plus = ew_plus_start_new
 
+        logger.debug("Adjusted editor configuration for 5' PAM mode")
+
     if 'all' not in basechange:
         bes = {key: bes[key] for key in basechange}
 
+    logger.info("Using %d base editor(s)", len(bes))
+    logger.debug("Selected base editors: %s", ', '.join(bes.keys()))
+
+    logger.info("Loading reference genome from %s", refgenome)
     ref_genome_pyfaidx = pyfaidx.Fasta(refgenome)
     parquet_file = shared.check_parquet(annotation_file, write_parquet)
     cdss = pl.read_parquet(parquet_file)
+    logger.info("Loaded annotation parquet %s with %d CDS row(s)", parquet_file, cdss.height)
 
     if mane_select_only:
         cdss = cdss.filter(pl.col('MANE_Select'))
+        logger.info("Restricted annotation to %d MANE Select CDS row(s)", cdss.height)
 
     variant_list = _prepare_variant_list(
         input_variant, input_file, input_format, cdss, ref_genome_pyfaidx, dbsnp_db
+    )
+    logger.info(
+        "Prepared %d variant input(s) across %d base editor(s)",
+        len(variant_list),
+        len(bes),
     )
 
     distance_median_dict = shared.qc_precalc(edit_window_start, edit_window_end)
@@ -1783,6 +1928,8 @@ def design_bes(
             )
             results.append(result)
             all_variant_real.append(result.variant_real)
+
+            logger.info("Processed %d variant/editor combination(s)", len(results))
 
     sgrnas = _build_sgrna_dataframe(results)
 
@@ -1832,17 +1979,25 @@ def design_bes(
         filter_startlost=filter_startlost,
     )
 
+    logger.info(
+        "Finished guide design with %d output row(s) and %d SAM row(s)",
+        sgrnas.height,
+        sam_df.height,
+    )
+
     return sgrnas, sam_df
 
 
 def output_sgrnas(sgrnas: pl.DataFrame, output_file: str) -> None:
     """Write *sgrnas* to TSV files (full and filtered)."""
+    logger.info("Writing sgRNA output to %s.tsv", output_file)
     sgrnas.write_csv(output_file + ".tsv", separator='\t')
 
     sgrnas_filtered = sgrnas.filter(
         (pl.col("guide").cast(str) != "no_guides_found") &
         (pl.col("guide").cast(str) != "be_not_usable")
     )
+    logger.info("Writing filtered sgRNA output to %s_filtered.tsv", output_file)
     sgrnas_filtered.write_csv(output_file + "_filtered.tsv", separator='\t')
 
 
@@ -1853,13 +2008,14 @@ def output_guides_sam(
 ) -> None:
     """Convert *sam_df* to a sorted, indexed BAM file."""
     if sam_df.is_empty():
-        print("No variant guides could be identified: No BAM file will be written.")
+        logger.warning("No variant guides could be identified; no BAM file will be written")
         return
 
     sam_path = output_file + "_filtered.sam"
     unsorted_bam = output_file + "_filtered_unsorted.bam"
     sorted_bam = output_file + "_filtered.bam"
 
+    logger.info("Writing guide alignment output to %s", sorted_bam)
     sam_df.write_csv(sam_path, separator='\t', include_header=False)
     pysam.view(sam_path, '-b', '-o', unsorted_bam, '-t', refgenome + '.fai',
                catch_stdout=False)
@@ -1867,6 +2023,7 @@ def output_guides_sam(
     pysam.sort('-o', sorted_bam, unsorted_bam)
     os.remove(unsorted_bam)
     pysam.index(sorted_bam)
+    logger.info("Finished writing sorted and indexed BAM to %s", sorted_bam)
 
 
 if __name__ == "__main__":
