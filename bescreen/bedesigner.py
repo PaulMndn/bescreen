@@ -54,7 +54,7 @@ _ERROR_CODES: frozenset[str] = frozenset({
 # Dataclasses
 # ---------------------------------------------------------------------------
 
-@dataclass
+@dataclass(frozen=True)
 class _PamConfig:
     """Precomputed PAM / editing-window search parameters.
 
@@ -1333,11 +1333,15 @@ def _apply_vep_annotations(
     vep_species: str,
     vep_assembly: str,
     vep_dir_cache: str,
-    vep_dir_plugins: str,
     vep_cache_version: str,
     vep_flags: str,
 ) -> pl.DataFrame:
-    """Fetch and merge VEP annotations into *sgrnas*."""
+    """Fetch and merge VEP annotations into *sgrnas*.
+
+    Note: the ``vep_dir_plugins`` parameter exists in the public API for
+    forward-compatibility but is not yet consumed by VEP (commented out
+    in the original implementation).
+    """
     non_vep_values = list(_ERROR_CODES) + ['no_guides_found', 'be_not_usable']
 
     variants_vep = (
@@ -1795,7 +1799,6 @@ def design_bes(
             vep_species=vep_species,
             vep_assembly=vep_assembly,
             vep_dir_cache=vep_dir_cache,
-            vep_dir_plugins=vep_dir_plugins,
             vep_cache_version=vep_cache_version,
             vep_flags=vep_flags,
         )
