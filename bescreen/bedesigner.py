@@ -46,6 +46,7 @@ _ERROR_CODES: frozenset[str] = frozenset({
     'reference_not_amino_acid',
     'mutation_not_amino_acid',
     'input_position_not_numeric',
+    'input_position_outside_ref_sequence',
     'putative_intron_spanning_codon',
     'wrong_reference_amino_acid',
     'non_existent_input_rsID',
