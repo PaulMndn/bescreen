@@ -7,7 +7,9 @@ def get_variant_from_protein(transcript,
                              mutation,
                              bescreen_annotation,
                              bescreen_ref_genome,
-                             snvs_only):
+                             snvs_only,
+                             gene_names,
+                             transcript_names):
 
     codon_sun_one_letter = copy.deepcopy(shared.codon_sun_one_letter)
 
@@ -28,12 +30,14 @@ def get_variant_from_protein(transcript,
     if mutation == '':
         return ['no_input_mutation_given']
 
-    if len(transcript.split('-')) == 2:
+    # if len(transcript.split('-')) == 2: # does not work, since some genes have hyphen
+    if transcript in transcript_names:
         transcript_exons = bescreen_annotation.filter(pl.col('transcript_name') == transcript).sort('exon_number') # maybe they are already sorted, but make sure
         if transcript_exons.is_empty():
             return ['input_transcript_not_found']
 
-    elif len(transcript.split('-')) == 1:
+    # elif len(transcript.split('-')) == 1: # does not work, since some genes have hyphen
+    elif transcript in gene_names:
         transcript_exons = bescreen_annotation.filter((pl.col('gene_name') == transcript) & pl.col('MANE_Select')).sort('exon_number') # maybe they are already sorted, but make sure
         if transcript_exons.is_empty():
             return ['input_gene_not_found']
@@ -80,15 +84,18 @@ def get_variant_from_protein(transcript,
         start_cds = (position_mut-1) * 3 # transform bases to aa
         end_cds = ((position_mut-1) * 3) + 3 # transform bases to aa
 
-        while not exon_found:
+        # while not exon_found: # while loop is looped infinitely, if codon is exon-spanning
 
-            for index, exon_range in enumerate(exon_ranges): # find exon with overlap; does this also find partial overlaps?
+        for index, exon_range in enumerate(exon_ranges): # find exon with overlap; does this also find partial overlaps? No, it does not
 
-                if set(range(start_cds, end_cds)).issubset(set(exon_range)):
-                    index_found = index
-                    exon_range_found = exon_range
-                    exon_found = True
-                    break
+            if set(range(start_cds, end_cds)).issubset(set(exon_range)):
+                index_found = index
+                exon_range_found = exon_range
+                exon_found = True
+                break
+
+        if exon_found == False:
+            return ['putative_intron_spanning_codon']
 
         if strands[index_found] == '+':
             genome_start = genome_ranges[index_found][0] + (start_cds-exon_range_found[0])

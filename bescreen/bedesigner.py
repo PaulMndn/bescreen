@@ -46,6 +46,7 @@ _ERROR_CODES: frozenset[str] = frozenset({
     'reference_not_amino_acid',
     'mutation_not_amino_acid',
     'input_position_not_numeric',
+    'putative_intron_spanning_codon',
     'wrong_reference_amino_acid',
     'non_existent_input_rsID',
     'genomic_position_not_numeric',
@@ -205,13 +206,23 @@ def _resolve_tmuts(
     Each returned string is of the form ``"<tmut>:<chrom_pos_ref_alt>"``.
     """
     logger.debug("Resolving %d transcript mutation input(s)", len(tmuts))
+
+    all_genes = set(cdss.get_column('gene_name'))
+    all_transcripts = set(cdss.get_column('transcript_name'))
+    
     resolved: list[str] = []
     for tmut in tmuts:
         parts = tmut.split("-")
         transcript = '-'.join(parts[:-1])
         mutation = parts[-1]
         tmutvar = protein_variant.get_variant_from_protein(
-            transcript, mutation, cdss, ref_genome, True
+            transcript, 
+            mutation, 
+            cdss, 
+            ref_genome, 
+            True, 
+            all_genes, 
+            all_transcripts
         )
         for snp in tmutvar:
             resolved.append(f'{tmut}:{snp}')
@@ -304,9 +315,11 @@ def _prepare_variant_list(
     if rsids:
         variant_list += _resolve_rsids(rsids, dbsnp_db)
 
+    all_genes_transcripts = set(cdss.get_column('gene_name')) | set(cdss.get_column('transcript_name'))
+
     tmuts = [
         v for v in variant_list
-        if len(v.split("_")) == 1 and len(v.split("-")) in [2, 3]
+        if len(v.split("_")) == 1 and '-'.join(v.split("-")[0:-1]) in all_genes_transcripts
     ]
     for tmut in tmuts:
         variant_list.remove(tmut)
@@ -394,6 +407,7 @@ def _setup_pam_config(
 def _parse_variant_coords(
     variant: str,
     ignorestring: str | None,
+    all_genes_transcripts: set[str],
 ) -> tuple[str, Any, str, str, str]:
     """Parse a variant string into (chrom, position, ref, alt, variant).
 
@@ -407,7 +421,8 @@ def _parse_variant_coords(
     if len(parts) == 4 and parts[0].startswith('rs'):
         rsidchrom, position, ref, alt = parts
         _rsid, chrom = rsidchrom.split(":")
-    elif len(parts) == 4 and len(parts[0].split("-")) in [2, 3]:
+    # elif len(variant_coords) == 4 and len(variant_coords[0].split("-")) in [2, 3]: # does not work, since some genes have hyphen
+    elif len(parts) == 4 and '-'.join(parts[0].split("-")[0:-1]) in all_genes_transcripts:
         tmutchrom, position, ref, alt = parts
         _tmut, chrom = tmutchrom.split(":")
     elif len(parts) == 4:
@@ -471,6 +486,7 @@ def _extract_variant_real(
     target_base_ref: str,
     edits: dict[str, str],
     allpossible: bool,
+    all_genes_transcripts: set[str],
 ) -> str:
     """Derive the 'real' variant string (stripped of rsID/tmut prefix).
 
@@ -481,9 +497,14 @@ def _extract_variant_real(
 
     if error_code is not None:
         variant_real = rsidtmut_parts[1] if len(rsidtmut_parts) > 1 else variant
+    # elif (
+    #     len(rsidtmut_parts) == 2
+    #     and (rsidtmut_parts[0].startswith('rs') or len(rsidtmut_parts[0].split("-")) in [2, 3])
+    # ):
     elif (
-        len(rsidtmut_parts) == 2
-        and (rsidtmut_parts[0].startswith('rs') or len(rsidtmut_parts[0].split("-")) in [2, 3])
+        len(rsidtmut_parts) == 2 
+        and (rsidtmut_parts[0].startswith('rs') 
+             or '-'.join(rsidtmut_parts[0].split("-")[0:-1]) in all_genes_transcripts)
     ):
         variant_real = rsidtmut_parts[1]
     else:
@@ -998,7 +1019,8 @@ def _process_variant_with_editor(
     it can be dispatched to a worker thread or process with no changes.
     """
     logger.debug("Processing variant %s with editor %s", variant, be_name)
-    chrom, position_str, ref, alt, variant = _parse_variant_coords(variant, ignorestring)
+    all_genes_transcripts = set(cdss.get_column('gene_name')) | set(cdss.get_column('transcript_name'))
+    chrom, position_str, ref, alt, variant = _parse_variant_coords(variant, ignorestring, all_genes_transcripts)
 
     error_code = _variant_error_code(variant)
 
@@ -1049,8 +1071,9 @@ def _process_variant_with_editor(
     error_code = _variant_error_code(variant)  # re-check after possible update
 
     # Compute the variant_real string
+    all_genes_transcripts = set(cdss.get_column('gene_name')) | set(cdss.get_column('transcript_name'))
     variant_real = _extract_variant_real(
-        variant, error_code, target_base_ref, edits, allpossible
+        variant, error_code, target_base_ref, edits, allpossible, all_genes_transcripts
     )
 
     # Non-editable early exit
