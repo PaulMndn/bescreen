@@ -1,12 +1,25 @@
 import os
 import sys
 import argparse
+import logging
 import polars as pl
 import bedesigner
 import besaturate
 import beregion
 import shared
 import copy
+
+
+logger = logging.getLogger(__name__)
+
+
+def _configure_logging(log_level: str) -> None:
+
+    logging.basicConfig(level=getattr(logging, log_level.upper(), logging.INFO),
+                        format='%(asctime)s | %(levelname)s | %(name)s | %(message)s',
+                        datefmt='%Y-%m-%d %H:%M:%S',
+                        stream=sys.stdout,
+                        force=True)
 
 
 def arguments():
@@ -80,6 +93,9 @@ def arguments():
                         default=0, type=int)
     parser.add_argument('-d', '--aspect', help='Collapsed (default) or exploded aspect of the output',
                         choices=['collapsed', 'exploded'], default='collapsed', type=str)
+    parser.add_argument('--log-level', help='Logging verbosity for stdout logs',
+                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+                        default='INFO', type=str.upper)
     parser.add_argument('-m', '--mane-select-only', help='Use only MANE select transcripts for searching and annotations. This will not find guides for non-MANE transcripts as input and might lead to reduced guides for variant and gene input',
                         action='store_true')
     parser.add_argument('-x', '--write-parquet', help='Force writing a new parquet file',
@@ -146,6 +162,9 @@ def arguments():
         sys.exit()
 
     args = parser.parse_args()
+
+    _configure_logging(args.log_level)
+    logger.debug('CLI arguments parsed with log level %s', args.log_level)
 
     if args.input and not os.path.isfile(args.input):
         sys.exit('Input file not found!')
@@ -406,6 +425,7 @@ if __name__ == "__main__":
     write_bam_arg = arguments()
 
     mode_arg = check_mode(input_file_arg, input_variant_arg, gene_symbols_arg, regions_arg, input_format_arg)
+    logger.info('Selected execution mode: %s', mode_arg)
 
     if mode_arg == 'bedesigner':
         # try:
