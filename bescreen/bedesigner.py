@@ -48,6 +48,8 @@ _ERROR_CODES: frozenset[str] = frozenset({
     'input_position_not_numeric',
     'input_position_outside_ref_sequence',
     'putative_intron_spanning_codon',
+    'no_suitable_snv_found',
+    'no_suitable_mutation_found',
     'wrong_reference_amino_acid',
     'non_existent_input_rsID',
     'genomic_position_not_numeric',
