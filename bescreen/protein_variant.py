@@ -81,6 +81,9 @@ def get_variant_from_protein(transcript,
     exon_found = False
     intron_spanning = False
 
+    if position_mut > len(aaseq):
+        return ['input_position_outside_ref_sequence']
+
     if aaseq[position_mut-1] == aa_ref: # check, reference aa is in transcript; cds and aaseq only necessary for this; simplify?
         start_cds = (position_mut-1) * 3 # transform bases to aa
         end_cds = ((position_mut-1) * 3) + 3 # transform bases to aa
